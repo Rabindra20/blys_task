@@ -1,0 +1,299 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Creates a VPC with 2 AZs each containing a Public and Private Subnet."
+
+Parameters:
+  EnvironmentMap:
+    Type: "String"
+    Description: "Environment map settings for resource configuration. See template for details."
+    ConstraintDescription: "Please select an environment"
+    AllowedPattern: ".+"
+    Default: "demo"
+
+  AvailabilityZone1:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+
+  AvailabilityZone2:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1b
+
+  CidrPrefix:
+    Type: "String"
+    Description: "Valid /16 ranges 172.16 - 172.31, 192.168, 10.0 - 10.255. This template assumes a /16 which is the largest CIDR allowed by AWS."
+    Default: "172.21"
+
+  CidrSuffixPublic1:
+    Type: "String"
+    Description: "Joined with VPC CIDR Prefix"
+    Default: "48.0/20"
+
+  CidrSuffixPublic2:
+    Type: "String"
+    Description: "Joined with VPC CIDR Prefix"
+    Default: "64.0/20"
+
+  CidrSuffixPriv1:
+    Type: "String"
+    Description: "Joined with VPC CIDR Prefix"
+    Default: "80.0/20"
+
+  CidrSuffixPriv2:
+    Type: "String"
+    Description: "Joined with VPC CIDR Prefix"
+    Default: "96.0/20"
+
+  TagProject:
+    Type: "String"
+    Description: "Name of the project"
+    Default: "wordpress"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Environment"
+        Parameters:
+          - "EnvironmentMap"
+      - Label:
+          default: "VPC Network Settings"
+        Parameters:
+          - AvailabilityZone1
+          - AvailabilityZone2
+          - CidrPrefix
+          - CidrSuffixPublic1
+          - CidrSuffixPublic2
+          - CidrSuffixPriv1
+          - CidrSuffixPriv2
+      - Label:
+          default: "Tagging"
+        Parameters:
+          - TagProject
+    ParameterLabels:
+      EnvironmentMap:
+        default: "Environment Settings Map."
+      AvailabilityZone1:
+        default: "AZ 1"
+      AvailabilityZone2:
+        default: "AZ 2"
+      CidrPrefix:
+        default: "VPC CIDR Prefix"
+      CidrSuffixPublic1:
+        default: "AZ 1 Public Subnet Suffix"
+      CidrSuffixPublic2:
+        default: "AZ 2 Public Subnet Suffix"
+      CidrSuffixPriv1:
+        default: "AZ 1 Private Subnet Suffix"
+      CidrSuffixPriv2:
+        default: "AZ 2 Private Subnet Suffix"
+      TagProject:
+        default: "Project Name Tag"
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Join [ ".", [!Ref CidrPrefix, "0.0/16"]]
+      InstanceTenancy: default
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
+        - Key: Name
+          Value: !Join ["-", [!Ref TagProject, !Ref EnvironmentMap]]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref TagProject, !Ref EnvironmentMap]]
+        - Key: Project
+          Value: !Ref TagProject
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    DependsOn: InternetGateway
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnet - AZ 1
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Join [ ".", [!Ref CidrPrefix, !Ref CidrSuffixPublic1]]
+      AvailabilityZone: !Ref AvailabilityZone1
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref TagProject, !Ref EnvironmentMap, "PublicSubnet1"]]
+        - Key: Project
+          Value: !Ref TagProject
+
+  # Public Subnet - AZ 2
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Join [ ".", [!Ref CidrPrefix, !Ref CidrSuffixPublic2]]
+      AvailabilityZone: !Ref AvailabilityZone2
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref TagProject, !Ref EnvironmentMap, "PublicSubnet2"]]
+        - Key: Project
+          Value: !Ref TagProject
+
+  # Private Subnet 1 - AZ 1
+  SubnetPriv1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Join [ ".", [!Ref CidrPrefix, !Ref CidrSuffixPriv1]]
+      AvailabilityZone: !Ref AvailabilityZone1
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref TagProject, !Ref EnvironmentMap, "PrivateSubnet1"]]
+        - Key: Project
+          Value: !Ref TagProject
+
+  # Private Subnet 2 - AZ 2
+  SubnetPriv2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Join [ ".", [!Ref CidrPrefix, !Ref CidrSuffixPriv2]]
+      AvailabilityZone: !Ref AvailabilityZone2
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref TagProject, !Ref EnvironmentMap, "PrivateSubnet2"]]
+        - Key: Project
+          Value: !Ref TagProject
+
+  # Elastic IP for NAT Gateway
+  NATeIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  # NAT Gateway
+  NATgw:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATeIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref TagProject, !Ref EnvironmentMap, "NATGateway"]]
+        - Key: Project
+          Value: !Ref TagProject
+
+  # Route Table for Public Subnets
+  RouteTablePublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref TagProject, !Ref EnvironmentMap, "PublicRouteTable"]]
+        - Key: Project
+          Value: !Ref TagProject
+
+  PublicSubnetRouteTableAssoc1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: PublicSubnet1
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnetRouteTableAssoc2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: PublicSubnet2
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      SubnetId: !Ref PublicSubnet2
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Route Table for Private Subnets
+  RouteTablePrivate:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ["-", [!Ref TagProject, !Ref EnvironmentMap, "PrivateRouteTable"]]
+        - Key: Project
+          Value: !Ref TagProject
+
+  PrivateSubnetRouteTableAssoc1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetPriv1
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      SubnetId: !Ref SubnetPriv1
+
+  PrivateSubnetRouteTableAssoc2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetPriv2
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      SubnetId: !Ref SubnetPriv2
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATgw
+
+Outputs:
+  StackVPCID:
+    Description: "VPC ID"
+    Value: !Ref VPC
+    Export:
+      Name: !Join ["-", [!Ref "AWS::StackName", "VPCID"]]
+
+  VPCCidr:
+    Description: "VPC Cidr"
+    Value: !Join [ ".", [!Ref CidrPrefix, "0.0/16"]]
+    Export:
+      Name: !Join ["-", [!Ref "AWS::StackName", "VPCCidr"]]
+
+  PubSubnet1:
+    Description: "First Public Subnet ID"
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Join ["-", [!Ref "AWS::StackName", "PublicSubnet1"]]
+
+  PubSubnet2:
+    Description: "Second Public Subnet ID"
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Join ["-", [!Ref "AWS::StackName", "PublicSubnet2"]]
+
+  PvtSubnet1:
+    Description: "First Private Subnet ID"
+    Value: !Ref SubnetPriv1
+    Export:
+      Name: !Join ["-", [!Ref "AWS::StackName", "PrivateSubnet1"]]
+
+  PvtSubnet2:
+    Description: "Second Private Subnet ID"
+    Value: !Ref SubnetPriv2
+    Export:
+      Name: !Join ["-", [!Ref "AWS::StackName", "PrivateSubnet2"]]
+
+  VpcCidr:
+    Description: "CIDR block for the VPC"
+    Value: !GetAtt VPC.CidrBlock
+    Export:
+      Name: !Join ["-", [!Ref "AWS::StackName", "VpcCidr"]]

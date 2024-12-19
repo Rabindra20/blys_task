@@ -1,0 +1,435 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create an application
+
+#############################################################
+#Parameters
+#############################################################
+Parameters:
+  EnvironmentMap:
+    Type: "String"
+    Description: "Environment map settings for resource configuration.  See template for details."
+    ConstraintDescription: "Please select a environment"
+    AllowedPattern: ".+"
+    Default: "demo"
+
+  TagProject:
+    Type: "String"
+    Description: "Name of the project"
+    Default: "wordpress"
+
+  ProjectName:
+    Type: "String"
+    Description: "Name of the project"
+    Default: "wordpress"
+
+  DB_HOST:
+    Type: String
+    Description: Db host url
+    NoEcho: true
+
+  DB_USER:
+    Type: String
+    Description: Db user name
+    NoEcho: true
+
+  DB_NAME:
+    Type: String
+    Description: Db name
+    NoEcho: true
+
+  DB_PASSWORD:
+    Type: String
+    Description: Db password
+    NoEcho: true
+
+    
+  VPCStack:
+    Type: "String"
+    Description: "* The name of the Cloudformation Stack for this environments VPC.  Stack must have correct outputs defined."
+    ConstraintDescription: "Please provide the vpc stack name of which the application is part of"
+    AllowedPattern: ".+"
+    Default: "demo-network"
+
+#############################################################
+#Metadata
+#############################################################
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Environment"
+        Parameters:
+          - "EnvironmentMap"
+    ParameterLabels:
+      EnvironmentMap:
+        default: "Environment Settings Map."
+
+Mappings:
+  environment:
+    demo:
+      Stage: "DEVELOPMENT"
+
+Resources:
+#################### Secrets manager ####################
+  demoSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "wordpress/${EnvironmentMap}"
+      SecretString: !Sub |
+        {
+          "DB_HOST": "${DB_HOST}",
+          "DB_USER": "${DB_USER}",
+          "DB_NAME": "${DB_NAME}",
+          "DB_PASSWORD": ${DB_PASSWORD}",
+          "TABLE_PREFIX": "wp_"
+        }
+      # GenerateStringKey: "DB_PASSWORD"
+      # PasswordLength: 16
+      # ExcludeCharacters: "`^=|"
+      # IncludeSpace: false
+      Tags:
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
+
+
+#################### ECR ####################
+  # ECRRepository:
+  #   Type: AWS::ECR::Repository
+  #   Properties:
+  #     RepositoryName: !Join ["-", [!Ref EnvironmentMap, "wordpress"]]
+  #     LifecyclePolicy:
+  #       LifecyclePolicyText: !Sub |
+  #         {
+  #           "rules": [
+  #             {
+  #               "rulePriority": 1,
+  #               "description": "Retain 7 images",
+  #               "selection": {
+  #                 "tagStatus": "any",
+  #                 "countType": "imageCountMoreThan",
+  #                 "countNumber": 7
+  #               },
+  #               "action": { "type": "expire" }
+  #             }
+  #           ]
+  #         }
+  #     Tags:
+  #       - Key: Project
+  #         Value: !Ref TagProject
+  #       - Key: Environment
+  #         Value: !Ref EnvironmentMap
+
+# #################### ACM ####################
+  ACMCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: "wordpress.example.com.np"
+      SubjectAlternativeNames:
+        - "wordpress.example.com.np"   
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: "wordpress.example.com.np"
+          ValidationDomain: "example.com.np"
+      Tags:
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
+
+#################### ALB ####################
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for ALB"
+      VpcId: 
+        Fn::ImportValue: !Join ["-", [!Ref VPCStack, "VPCID"]]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0" 
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentMap}-ALB"
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Join ["-", [!Ref EnvironmentMap, "alb"]]
+      Subnets: 
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PublicSubnet1"]]
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PublicSubnet2"]]
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Scheme: internet-facing
+
+  HTTPListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    DependsOn: 
+      - ApplicationLoadBalancer
+    Properties:
+      DefaultActions:
+        - Type: "redirect"
+          RedirectConfig:
+            Protocol: "HTTPS"
+            Port: "443"
+            Host: "#{host}"
+            Path: "/#{path}"
+            Query: "#{query}"
+            StatusCode: "HTTP_301"
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: "HTTP"
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: 
+      - ApplicationLoadBalancer
+    Properties:
+      Matcher:
+        HttpCode: 200-499
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      TargetType: ip
+      Name: !Sub "${EnvironmentMap}-ecs"
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      VpcId:
+        Fn::ImportValue: !Join ["-", [!Ref VPCStack, "VPCID"]]
+
+  HTTPSListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    DependsOn: 
+      - ApplicationLoadBalancer
+    Properties:
+      DefaultActions:
+        - Type: "forward"
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Certificates:
+        - CertificateArn: !Ref ACMCertificate
+      Protocol: "HTTPS"
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+
+  HostRule:
+    Type: "AWS::ElasticLoadBalancingV2::ListenerRule"
+    DependsOn: 
+      - ApplicationLoadBalancer
+      - TargetGroup
+      - HTTPSListener
+    Properties:
+      ListenerArn: !Ref HTTPSListener
+      Priority: 1
+      Conditions:
+        - Field: "host-header"
+          HostHeaderConfig:
+            Values: "wordpress.example.com.np"
+      Actions:
+        - Type: "forward"
+          TargetGroupArn: !Ref TargetGroup 
+
+#################### Role ####################
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EnvironmentMap}-ServiceTaskRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+          - PolicyName: AmazonECSServiceTaskRolePolicy
+            PolicyDocument:
+              Statement:
+                  Action:
+                    - "secretsmanager:GetSecretValue"
+                    - ssmmessages:CreateControlChannel
+                    - ssmmessages:CreateDataChannel
+                    - ssmmessages:OpenControlChannel
+                    - ssmmessages:OpenDataChannel
+                  Resource: "*"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EnvironmentMap}-ServiceTaskExecutionRole"
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: AmazonECSTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  # Allow the ECS tasks to upload logs to CloudWatch
+                  - logs:CreateLogStream
+                  - logs:CreateLogGroup
+                  - logs:PutLogEvents
+                  - secretsmanager:GetSecretValue
+                  - kms:Decrypt
+                Resource: "*"
+                
+#################### ecs ####################
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join ["-", [!Ref EnvironmentMap, "cluster"]]
+      Tags:
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
+
+  FargateContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${EnvironmentMap}-ServiceContainerSecurityGroup"
+      GroupDescription: Access to the Fargate containers
+      VpcId: 
+        Fn::ImportValue: !Join ["-", [!Ref VPCStack, "VPCID"]]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 
+            Fn::ImportValue: !Join ["-", [!Ref VPCStack, "VPCCidr"]]
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: demoSecrets
+    Properties:
+      Family: !Sub "${EnvironmentMap}Service"
+      Cpu: 512 #256
+      Memory: 1024 #512
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      # ExecEnabled: true
+      ContainerDefinitions:
+        - Name: !Sub "${EnvironmentMap}-Service"
+          Essential: true
+          Image: "wordpress:latest"    #!Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EnvironmentMap}:${EnvironmentMap}"
+          LogConfiguration:
+            LogDriver: "awslogs"
+            Options:
+              awslogs-group: !Sub "/ecs/${EnvironmentMap}-Service"
+              awslogs-create-group: "true"
+              awslogs-region: "us-east-1"
+              awslogs-stream-prefix: "ecs"
+          Environment:
+            - Name: WORDPRESS_DB_HOST
+              Value: !Sub "{{resolve:secretsmanager:wordpress/${EnvironmentMap}:SecretString:DB_HOST}}"
+            - Name: WORDPRESS_DB_USER
+              Value: !Sub "{{resolve:secretsmanager:wordpress/${EnvironmentMap}:SecretString:DB_USER}}"
+            - Name: WORDPRESS_DB_PASSWORD
+              Value: !Sub "{{resolve:secretsmanager:wordpress/${EnvironmentMap}:SecretString:DB_PASSWORD}}"
+            - Name: WORDPRESS_DB_NAME
+              Value: !Sub "{{resolve:secretsmanager:wordpress/${EnvironmentMap}:SecretString:DB_NAME}}"
+            - Name: WORDPRESS_TABLE_PREFIX
+              Value: !Sub "{{resolve:secretsmanager:wordpress/${EnvironmentMap}:SecretString:TABLE_PREFIX}}"
+          PortMappings:
+            - ContainerPort: 80
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: 
+      - TargetGroup
+      - ECSCluster
+    Properties:
+      ServiceName: !Sub "${EnvironmentMap}-Service"
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      EnableExecuteCommand: true
+      DesiredCount: 2
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 75
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups: 
+            - !Ref FargateContainerSecurityGroup
+          Subnets:
+            - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PrivateSubnet1"]]
+            - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PrivateSubnet2"]]
+      TaskDefinition: !Ref TaskDefinition
+      LoadBalancers:
+        - ContainerName: !Sub "${EnvironmentMap}-Service"
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroup
+
+#################### KMS ####################
+
+  CustomerManagedKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: "Customer-managed KMS key for secure encryption"
+      Enabled: true
+      EnableKeyRotation: true
+      MultiRegion: true
+      RotationPeriodInDays: 90
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowRootAccountAccess"
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+
+          - Sid: "AllowCloudTrailAccess"
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: "kms:GenerateDataKey"
+            Resource: "*"
+            
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentMap}-KMS"
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
+
+  KMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/custom-key"
+      TargetKeyId: !Ref CustomerManagedKMSKey
+
+###################################################
+#Output
+###################################################
+# Outputs:
