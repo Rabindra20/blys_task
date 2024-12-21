@@ -1,6 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: "Creates a VPC with 2 AZs each containing a Public and Private Subnet."
-
+#############################################################
+#Parameters
+#############################################################
 Parameters:
   EnvironmentMap:
     Type: "String"
@@ -46,7 +48,9 @@ Parameters:
     Type: "String"
     Description: "Name of the project"
     Default: "wordpress"
-
+#############################################################
+#Metadata
+#############################################################
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -120,7 +124,7 @@ Resources:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  # Public Subnet - AZ 1
+############### Public Subnet - AZ 1 ############################
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -133,7 +137,7 @@ Resources:
         - Key: Project
           Value: !Ref TagProject
 
-  # Public Subnet - AZ 2
+############################# Public Subnet - AZ 2 ############################
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
@@ -146,7 +150,7 @@ Resources:
         - Key: Project
           Value: !Ref TagProject
 
-  # Private Subnet 1 - AZ 1
+############################ Private Subnet 1 - AZ 1 ############################
   SubnetPriv1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -159,7 +163,7 @@ Resources:
         - Key: Project
           Value: !Ref TagProject
 
-  # Private Subnet 2 - AZ 2
+############################ Private Subnet 2 - AZ 2 ############################
   SubnetPriv2:
     Type: AWS::EC2::Subnet
     Properties:
@@ -172,13 +176,13 @@ Resources:
         - Key: Project
           Value: !Ref TagProject
 
-  # Elastic IP for NAT Gateway
+############################Elastic IP for NAT Gateway ############################
   NATeIP:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
 
-  # NAT Gateway
+############################NAT Gateway ############################
   NATgw:
     Type: AWS::EC2::NatGateway
     Properties:
@@ -190,7 +194,7 @@ Resources:
         - Key: Project
           Value: !Ref TagProject
 
-  # Route Table for Public Subnets
+############################ Route Table for Public Subnets ############################
   RouteTablePublic:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -223,7 +227,7 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
-  # Route Table for Private Subnets
+############################ Route Table for Private Subnets ############################
   RouteTablePrivate:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -254,7 +258,9 @@ Resources:
       RouteTableId: !Ref RouteTablePrivate
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NATgw
-
+#############################################################
+#Output
+#############################################################
 Outputs:
   StackVPCID:
     Description: "VPC ID"

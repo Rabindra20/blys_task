@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: CloudFormation template to create an application
+Description: CloudFormation template to Deploy an application
 
 #############################################################
 #Parameters
@@ -71,8 +71,10 @@ Mappings:
 
 Resources:
 #################### Secrets manager ####################
-  demoSecrets:
+  Secrets:
     Type: AWS::SecretsManager::Secret
+    DependsOn:
+      - MySQLDBInstance
     Properties:
       Name: !Sub "wordpress/${EnvironmentMap}"
       SecretString: !Sub |
@@ -95,31 +97,31 @@ Resources:
 
 
 #################### ECR ####################
-  # ECRRepository:
-  #   Type: AWS::ECR::Repository
-  #   Properties:
-  #     RepositoryName: !Join ["-", [!Ref EnvironmentMap, "wordpress"]]
-  #     LifecyclePolicy:
-  #       LifecyclePolicyText: !Sub |
-  #         {
-  #           "rules": [
-  #             {
-  #               "rulePriority": 1,
-  #               "description": "Retain 7 images",
-  #               "selection": {
-  #                 "tagStatus": "any",
-  #                 "countType": "imageCountMoreThan",
-  #                 "countNumber": 7
-  #               },
-  #               "action": { "type": "expire" }
-  #             }
-  #           ]
-  #         }
-  #     Tags:
-  #       - Key: Project
-  #         Value: !Ref TagProject
-  #       - Key: Environment
-  #         Value: !Ref EnvironmentMap
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Join ["-", [!Ref EnvironmentMap, "wordpress"]]
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Retain 7 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 7
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
 
 # #################### ACM ####################
   ACMCertificate:
@@ -243,6 +245,61 @@ Resources:
         - Type: "forward"
           TargetGroupArn: !Ref TargetGroup 
 
+#################### WAF ####################
+  WAFv2WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${EnvironmentMap}-WebACL"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${EnvironmentMap}-WebACL"
+      Rules:
+        - Name: GeoMatchRule
+          Priority: 1
+          Statement:
+            GeoMatchStatement:
+              CountryCodes:
+                - NP
+          Action:
+            Allow: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: GeoMatchRule
+        - Name: RateLimitRule
+          Priority: 2
+          Statement:
+            RateBasedStatement:
+              Limit: 250
+              AggregateKeyType: IP
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentMap}-web-acl"
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
+
+  WAFv2WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    DependsOn: 
+      - ApplicationLoadBalancer
+      - WAFv2WebACL
+    Properties:
+      ResourceArn: !Ref ApplicationLoadBalancer
+      WebACLArn: !GetAtt WAFv2WebACL.Arn
+      
+
 #################### Role ####################
   ECSTaskRole:
     Type: AWS::IAM::Role
@@ -338,7 +395,7 @@ Resources:
       ContainerDefinitions:
         - Name: !Sub "${EnvironmentMap}-Service"
           Essential: true
-          Image: "wordpress:latest"    #!Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EnvironmentMap}:${EnvironmentMap}"
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EnvironmentMap}:${EnvironmentMap}" #"wordpress:latest"
           LogConfiguration:
             LogDriver: "awslogs"
             Options:
@@ -429,6 +486,108 @@ Resources:
       AliasName: !Sub "alias/custom-key"
       TargetKeyId: !Ref CustomerManagedKMSKey
 
+################################# VPC Endpoint ###################################
+  VPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for VPC Endpoints
+      VpcId: 
+        Fn::ImportValue: !Join ["-", [!Ref VPCStack, "VPCID"]]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 
+            Fn::ImportValue: !Join ["-", [!Ref VPCStack, "VPCCidr"]]
+
+  ECRAPIVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcId: 
+        Fn::ImportValue: !Join ["-", [!Ref VPCStack, "VPCID"]]
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PrivateSubnet1"]]
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PrivateSubnet2"]]
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentMap}-ecr-api-vpc-endpoint"
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
+
+  # VPC Endpoint for Amazon ECR DKR (Docker Registry)
+  ECRDKRVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcId: 
+        Fn::ImportValue: !Join ["-", [!Ref VPCStackName, "VPCID"]]
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStackName, "PrivateSubnet1"]]
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStackName, "PrivateSubnet2"]]
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentMap}-ecr-dkr-vpc-endpoint"
+        - Key: Project
+          Value: !Ref TagProject
+        - Key: Environment
+          Value: !Ref EnvironmentMap
+
+
+#################### MySQL DB Instance######################################
+
+  MySQLDBInstance:
+    Type: AWS::RDS::DBInstance
+    DependsOn: 
+      - MySQLSecurityGroup
+      - MySQLDBSubnetGroup
+    Properties:
+      DBInstanceIdentifier: !Sub "${EnvironmentMap}-mysql"
+      AllocatedStorage: 20
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: "8.0"
+      MasterUsername: !Ref DB_USER
+      MasterUserPassword: !Ref DB_PASSWORD
+      DBName: !Ref DB_NAME
+      BackupRetentionPeriod: 7
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !Ref MySQLSecurityGroupId
+      MultiAZ: false
+      StorageType: gp2
+      DBSubnetGroupName: !Ref DBSubnetGroupName
+      DeletionPolicy: Snapshot
+
+# Security Group for MySQL
+  MySQLSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${EnvironmentMap} MySQL Security Group"
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 
+            Fn::ImportValue: !Join ["-", [!Ref VPCStack, "VPCCidr"]]
+
+  # DB Subnet Group
+  MySQLDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub "${EnvironmentMap} DB Subnet Group"
+      SubnetIds:
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PrivateSubnet1"]]
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PrivateSubnet2"]]
 ###################################################
 #Output
 ###################################################
