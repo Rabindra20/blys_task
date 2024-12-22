@@ -1,7 +1,12 @@
 ### Overview
 
 This setup helps you easily deploy a WordPress application using AWS CloudFormation. It’s broken down into two main parts: setting up the network and setting up the application itself.<br/>
+Store the following secrets in your GitHub repository:<br/>
 
+  <br/>  DB_USER: WordPress database username.
+  <br/>  DB_NAME: WordPress database name.
+  <br/>  DB_PASSWORD: Password for the database.
+<br/>
 The flow of the setup ensures that your network is created first, followed by core application resources like the database, Secrets Manager, and ECR (Elastic Container Registry). ECS services are deployed only after the essential resources are ready.<br/>
 How It Works<br/>
 1. Network Setup

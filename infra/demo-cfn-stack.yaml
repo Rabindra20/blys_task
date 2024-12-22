@@ -22,11 +22,6 @@ Parameters:
     Description: "Name of the project"
     Default: "wordpress"
 
-  DB_HOST:
-    Type: String
-    Description: Db host url
-    NoEcho: true
-
   DB_USER:
     Type: String
     Description: Db user name
@@ -79,7 +74,6 @@ Resources:
       Name: !Sub "wordpress/${EnvironmentMap}"
       SecretString: !Sub |
         {
-          "DB_HOST": "${DB_HOST}",
           "DB_USER": "${DB_USER}",
           "DB_NAME": "${DB_NAME}",
           "DB_PASSWORD": ${DB_PASSWORD}",
@@ -529,8 +523,8 @@ Resources:
         Fn::ImportValue: !Join ["-", [!Ref VPCStackName, "VPCID"]]
       VpcEndpointType: Interface
       SubnetIds:
-        - Fn::ImportValue: !Join ["-", [!Ref VPCStackName, "PrivateSubnet1"]]
-        - Fn::ImportValue: !Join ["-", [!Ref VPCStackName, "PrivateSubnet2"]]
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PrivateSubnet1"]]
+        - Fn::ImportValue: !Join ["-", [!Ref VPCStack, "PrivateSubnet2"]]
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       Tags:
