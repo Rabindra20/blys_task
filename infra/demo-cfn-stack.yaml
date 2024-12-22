@@ -95,6 +95,8 @@ Resources:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Join ["-", [!Ref EnvironmentMap, "wordpress"]]
+      ImageScanningConfiguration:
+        ScanOnPush: true
       LifecyclePolicy:
         LifecyclePolicyText: !Sub |
           {
